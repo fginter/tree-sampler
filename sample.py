@@ -63,8 +63,8 @@ class Stats(object):
         source_H/=np.sum(source_H)
         target_H+=0.01*np.sum(target_H)
         target_H/=np.sum(target_H)
-        sampling=(np.log(target_H)-np.log(source_H))-np.log(2) #divide by four to get better shot at the long ones
-        sampling=np.clip(np.exp(sampling),a_min=None,a_max=1.0)**2 #sampling is now the probabilities with which to sample the trees
+        sampling=(np.log(target_H)-np.log(source_H))-np.log(args.divider) #divide by four to get better shot at the long ones
+        sampling=np.power(np.clip(np.exp(sampling),a_min=None,a_max=1.0),args.power) #sampling is now the probabilities with which to sample the trees
         if args.visualize:
             import matplotlib.pyplot as plt
             plt.pcolor(xedge,yedge,sampling.T,vmin=0,vmax=1,cmap="gray_r")
@@ -109,9 +109,9 @@ if __name__=="__main__":
     parser.add_argument('--estimate-tgt-max', type=int, default=20000, metavar="NUMTREES", help='Estimate target based on NUMTREES trees. Default %(default)d')
     parser.add_argument('--estimate-tgt-trees', default=None, help='Use trees from this file as target distribution data.')
     parser.add_argument('--visualize',default=False,action="store_true",help="Plot the sampling probabilities")
-
-    parser.add_argument('--stats-src', help='Source distribution estimator.')
-    parser.add_argument('--stats-tgt', help='Target distribution estimator.')
+    parser.add_argument('--divider',default=4.0,type=float,help="Constant divider for the probabilities. The higher the number, the less data is sampled, but the more fidelity. Default %(default)f")
+    parser.add_argument('--power',default=2.0,type=float,help="Take power of the sampling probabilities, further increasing chance that rare trees get sample. Default %(default)f")
+    parser.add_argument('--max-output',default=50000,type=int,help="Sample max this many trees. Default %(default)f")
 
     args = parser.parse_args()
 
@@ -138,12 +138,20 @@ if __name__=="__main__":
         sys.exit(-1)
 
     #and now sample
+    sampled=0
+    total=0
     for tree,comments in read_conll(sys.stdin,0):
+        total+=1
         if Stats.sample((tree,comments),bins,sampling_table):
+            sampled+=1
             if comments:
                 print("\n".join(comments))
             print("\n".join("\t".join(cols) for cols in tree))
             print()
+            if sampled>=args.max_output:
+                break
+    print("Sampled {} of {} trees".format(sampled,total),file=sys.stderr)
+
             
 
 
