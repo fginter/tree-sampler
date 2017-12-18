@@ -1,10 +1,17 @@
 import six
 assert six.PY3, "Run me with python3"
+import gzip
 import sys
 import json
 import sklearn.neighbors
+import sklearn.preprocessing
 import numpy as np
 import random
+import pickle
+import itertools
+import scipy
+
+ID,FORM,LEMMA,UPOS,XPOS,FEAT,HEAD,DEPREL,DEPS,MISC=range(10)
 
 def read_conll(inp,maxsent):
     """ Read conll format file and yield one sentence at a time as a list of lists of columns. If inp is a string it will be interpreted as filename, otherwise as open file for reading in unicode"""
@@ -35,62 +42,104 @@ def read_conll(inp,maxsent):
 
 class Stats(object):
 
-    def __init__(self,to_sample,stats_json):
-        with open(stats_json,"rt") as f:
-            probs=json.load(f)
-        self.buckets=np.ceil(np.exp(probs)*np.double(to_sample))
-        self.buckets[0]=0 #Do not sample length one
-        self.buckets=self.buckets[:30] #don't bother with stuff > 100
-        print(self.buckets,file=sys.stderr)
-
-    def sample(self,tree):
-        bucket_idx=len(tree)-1
-        if bucket_idx>=len(self.buckets) or self.buckets[bucket_idx]==0:
-            return False
-        else:
-            self.buckets[bucket_idx]-=1
-            return True
-
-    def report_missing(self):
-        print("Length  --   Missing trees",file=sys.stderr)
-        for l,miss in enumerate(self.buckets):
-            print(l+1,"     ",miss,file=sys.stderr)
     
+        
     @classmethod
-    def estimate(cls,inp,max_trees=100000,save_json_file=None):
-        lengths=[]
-        for tree,comments in read_conll(inp,max_trees):
-            lengths.append([len(tree)])
-        estimator=sklearn.neighbors.KernelDensity(kernel="gaussian",bandwidth=2)
-        estimator.fit(lengths)
-        logprobs=list(estimator.score_samples([[i] for i in range(1,1000)])) #Sample probabilities in range 1-1000
-        if save_json_file is not None:
-            json.dump(logprobs,save_json_file)
-#        print(*50000).astype(np.int))
+    def tree_features(cls,trees):
+        features=[] #tree features, right now (length, unique types per token), can be more in the future
+        for tree,comments in trees:
+            uniq_types=len(set(cols[DEPREL] for cols in tree))
+            features.append([len(tree),uniq_types])
+        features=np.asarray(features,dtype=np.double)
+        return features
+
+    @classmethod
+    def hist_estimate(cls,source_features,target_features,args):
+        tree_len_bins=np.arange(1,30,2)
+        dtype_bins=np.arange(1,30,2)
+        source_H,xedge,yedge=np.histogram2d(source_features[:,0],source_features[:,1],bins=[tree_len_bins, dtype_bins],normed=False)
+        target_H,xedge,yedge=np.histogram2d(target_features[:,0],target_features[:,1],bins=[tree_len_bins, dtype_bins],normed=False)
+        source_H+=0.01*np.sum(source_H)
+        source_H/=np.sum(source_H)
+        target_H+=0.01*np.sum(target_H)
+        target_H/=np.sum(target_H)
+        sampling=(np.log(target_H)-np.log(source_H))-np.log(2) #divide by four to get better shot at the long ones
+        sampling=np.clip(np.exp(sampling),a_min=None,a_max=1.0)**2 #sampling is now the probabilities with which to sample the trees
+        if args.visualize:
+            import matplotlib.pyplot as plt
+            plt.pcolor(xedge,yedge,sampling.T,vmin=0,vmax=1,cmap="gray_r")
+            plt.colorbar()
+            plt.title("Sampling of pure data (blue downsampled)")
+            plt.xlabel("Tree length")
+            plt.ylabel("Num dep types")
+            plt.show()
+        return (tree_len_bins,dtype_bins), sampling
+
+    @classmethod
+    def grid(cls,scaler,estimator):
+        lengths=np.arange(1,30,1)
+        uniq_types=np.arange(0,1,0.05)
+        features=np.stack((np.meshgrid(lengths,uniq_types)),-1).reshape(-1,2)
+        norm_features=scaler.transform(features)
+        log_scores=estimator.score_samples(norm_features)
+        norm_const=scipy.special.logsumexp(log_scores)
+        log_scores-=norm_const
+        return features,log_scores
+        
+    @classmethod
+    def sample(cls,tree,bins,sampling_table):
+        tree_len_bins,dtype_bins=bins
+        feats=cls.tree_features([tree])[0]
+        tlen_bin=np.digitize(feats[0],tree_len_bins)
+        dtype_bin=np.digitize(feats[1],dtype_bins)
+        tlen_bin=tlen_bin.clip(None,sampling_table.shape[0]-1)
+        dtype_bin=dtype_bin.clip(None,sampling_table.shape[1]-1)
+        sampling_prob=sampling_table[tlen_bin,dtype_bin]
+        #print("Feats",feats,"sample prob",sampling_prob)
+        return np.random.random()<sampling_prob
+
+        
 
 if __name__=="__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description='Sampler')
-    parser.add_argument('--estimate', type=int, default=0, metavar="NUMTREES", help='Estimate from stdin, dump json to stdout. Estimate based on NUMTREES trees.')
-    parser.add_argument('--stats', dest='stats_json', default=None, action="store", help='Json file with the stats produced by --estimate')
-    parser.add_argument('--sample', default=10000, action="store", help='Aim at sampling this many trees total. Default %(default)d')
-    parser.add_argument('--max-trees', default=500000, action="store", help='Max number of trees to read when sampling. Default %(default)d')
+    parser.add_argument('--estimate-src-max', type=int, default=20000, metavar="NUMTREES", help='Estimate source based on NUMTREES trees. Default %(default)d')
+    parser.add_argument('--estimate-src-trees', default=None, help='Use trees from this file as source distribution data.')
+    parser.add_argument('--estimate-tgt-max', type=int, default=20000, metavar="NUMTREES", help='Estimate target based on NUMTREES trees. Default %(default)d')
+    parser.add_argument('--estimate-tgt-trees', default=None, help='Use trees from this file as target distribution data.')
+    parser.add_argument('--visualize',default=False,action="store_true",help="Plot the sampling probabilities")
+
+    parser.add_argument('--stats-src', help='Source distribution estimator.')
+    parser.add_argument('--stats-tgt', help='Target distribution estimator.')
 
     args = parser.parse_args()
 
-    sampled_trees=[]
-    
-    if args.estimate>0:
-        Stats.estimate(sys.stdin,max_trees=args.estimate,save_json_file=sys.stdout)
-    elif args.stats_json is not None:
-        stats=Stats(args.sample,args.stats_json)
-        for tree,comments in read_conll(sys.stdin,0):
-            if stats.sample(tree):
-                sampled_trees.append((tree,comments))
-        stats.report_missing()
-        random.shuffle(sampled_trees)
-        for tree,comments in sampled_trees:
+    if args.estimate_src_trees is not None and args.estimate_tgt_trees is not None: #we are estimating density
+        print("Estimation",file=sys.stderr)
+        if args.estimate_src_trees.endswith(".gz"):
+            inp=gzip.open(args.estimate_src_trees,"rt")
+        else:
+            inp=open(args.estimate_src_trees,"rt")
+        source_trees=list(read_conll(inp,args.estimate_src_max))
+
+        if args.estimate_tgt_trees.endswith(".gz"):
+            inp=gzip.open(args.estimate_tgt_trees,"rt")
+        else:
+            inp=open(args.estimate_tgt_trees,"rt")
+        #read training data
+        target_trees=list(read_conll(inp,args.estimate_tgt_max))
+
+        source_features=Stats.tree_features(source_trees)
+        target_features=Stats.tree_features(target_trees)
+        bins,sampling_table=Stats.hist_estimate(source_features,target_features,args)
+    else:
+        print("You need to provide --estimate-...-trees parameters",file=sys.stderr)
+        sys.exit(-1)
+
+    #and now sample
+    for tree,comments in read_conll(sys.stdin,0):
+        if Stats.sample((tree,comments),bins,sampling_table):
             if comments:
                 print("\n".join(comments))
             print("\n".join("\t".join(cols) for cols in tree))
