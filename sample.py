@@ -111,11 +111,42 @@ if __name__=="__main__":
     parser.add_argument('--visualize',default=False,action="store_true",help="Plot the sampling probabilities")
     parser.add_argument('--divider',default=4.0,type=float,help="Constant divider for the probabilities. The higher the number, the less data is sampled, but the more fidelity. Default %(default)f")
     parser.add_argument('--power',default=2.0,type=float,help="Take power of the sampling probabilities, further increasing chance that rare trees get sample. Default %(default)f")
-    parser.add_argument('--max-output',default=50000,type=int,help="Sample max this many trees. Default %(default)f")
+    parser.add_argument('--max-output',default=50000,type=int,help="Sample max this many trees. Zero means all. Default %(default)d")
+    parser.add_argument('--random',type=float,help="Sample with a random rate given as number between 0-1. Stop when max-output reached.")
+    parser.add_argument('--shuffle',default=False, action="store_true",help="Read input, shuffle, sample max-output trees.")
+    
+    
 
     args = parser.parse_args()
 
-    if args.estimate_src_trees is not None and args.estimate_tgt_trees is not None: #we are estimating density
+    sampled=0
+    total=0
+    if args.random is not None:
+        for tree,comments in read_conll(sys.stdin,0):
+            total+=1
+            if random.random()<args.random:
+                sampled+=1
+                if comments:
+                    print("\n".join(comments))
+                print("\n".join("\t".join(cols) for cols in tree))
+                print()
+                if args.max_output>0 and sampled>=args.max_output:
+                    break
+    elif args.shuffle:
+        trees=list(read_conll(sys.stdin,0))
+        random.shuffle(trees)
+        total=len(trees)
+        if args.max_output==0: #zero means all as the help says...
+            src_trees=trees
+        else:
+            src_trees=itertools.islice(trees,args.max_output)
+        for tree,comments in src_trees:
+            sampled+=1
+            if comments:
+                print("\n".join(comments))
+            print("\n".join("\t".join(cols) for cols in tree))
+            print()
+    elif args.estimate_src_trees is not None and args.estimate_tgt_trees is not None: #we are estimating density
         print("Estimation",file=sys.stderr)
         if args.estimate_src_trees.endswith(".gz"):
             inp=gzip.open(args.estimate_src_trees,"rt")
@@ -133,23 +164,21 @@ if __name__=="__main__":
         source_features=Stats.tree_features(source_trees)
         target_features=Stats.tree_features(target_trees)
         bins,sampling_table=Stats.hist_estimate(source_features,target_features,args)
+
+        for tree,comments in read_conll(sys.stdin,0):
+            total+=1
+            if Stats.sample((tree,comments),bins,sampling_table):
+                sampled+=1
+                if comments:
+                    print("\n".join(comments))
+                print("\n".join("\t".join(cols) for cols in tree))
+                print()
+                if sampled>=args.max_output:
+                    break
     else:
-        print("You need to provide --estimate-...-trees parameters",file=sys.stderr)
+        print("Don't know what to do. You need to give --estimate-* or --shuffle or --random.",file=sys.stderr)
         sys.exit(-1)
 
-    #and now sample
-    sampled=0
-    total=0
-    for tree,comments in read_conll(sys.stdin,0):
-        total+=1
-        if Stats.sample((tree,comments),bins,sampling_table):
-            sampled+=1
-            if comments:
-                print("\n".join(comments))
-            print("\n".join("\t".join(cols) for cols in tree))
-            print()
-            if sampled>=args.max_output:
-                break
     print("Sampled {} of {} trees".format(sampled,total),file=sys.stderr)
 
             
