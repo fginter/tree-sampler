@@ -13,15 +13,26 @@ import scipy
 
 ID,FORM,LEMMA,UPOS,XPOS,FEAT,HEAD,DEPREL,DEPS,MISC=range(10)
 
-def read_conll(inp,maxsent):
+def read_conll(inp,maxsent,args):
     """ Read conll format file and yield one sentence at a time as a list of lists of columns. If inp is a string it will be interpreted as filename, otherwise as open file for reading in unicode"""
     count=0
     sent=[]
     comments=[]
+    seen=set() #set of trees seen so far
+    dups=0
     for line in inp:
         line=line.strip()
         if not line:
             if sent:
+                if args.dedup:
+                    txt="".join(cols[1] for cols in sent).lower()
+                    if txt in seen:
+                        dups+=1
+                        sent=[]
+                        comments=[]
+                        continue
+                    else:
+                        seen.add(txt)
                 count+=1
                 yield sent, comments
                 if maxsent!=0 and count>=maxsent:
@@ -37,8 +48,16 @@ def read_conll(inp,maxsent):
             sent.append(line.split("\t"))
     else:
         if sent:
-            yield sent, comments
-
+            if args.dedup:
+                txt="".join(cols[1] for cols in sent).lower()
+                if txt in seen:
+                    dups+=1
+                else:
+                    yield sent, comments
+            else:
+                yield sent, comments
+    if args.dedup:
+        print("Removed {} duplicates".format(dups),file=sys.stderr)
 
 class Stats(object):
 
@@ -104,6 +123,7 @@ if __name__=="__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description='Sampler')
+    parser.add_argument('--dedup',default=False, action="store_true",help="Dedup the input before doing anything else")
     parser.add_argument('--estimate-src-max', type=int, default=20000, metavar="NUMTREES", help='Estimate source based on NUMTREES trees. Default %(default)d')
     parser.add_argument('--estimate-src-trees', default=None, help='Use trees from this file as source distribution data.')
     parser.add_argument('--estimate-tgt-max', type=int, default=20000, metavar="NUMTREES", help='Estimate target based on NUMTREES trees. Default %(default)d')
@@ -122,7 +142,7 @@ if __name__=="__main__":
     sampled=0
     total=0
     if args.random is not None:
-        for tree,comments in read_conll(sys.stdin,0):
+        for tree,comments in read_conll(sys.stdin,0,args):
             total+=1
             if random.random()<args.random:
                 sampled+=1
@@ -133,7 +153,7 @@ if __name__=="__main__":
                 if args.max_output>0 and sampled>=args.max_output:
                     break
     elif args.shuffle:
-        trees=list(read_conll(sys.stdin,0))
+        trees=list(read_conll(sys.stdin,0,args))
         random.shuffle(trees)
         total=len(trees)
         if args.max_output==0: #zero means all as the help says...
@@ -152,20 +172,20 @@ if __name__=="__main__":
             inp=gzip.open(args.estimate_src_trees,"rt")
         else:
             inp=open(args.estimate_src_trees,"rt")
-        source_trees=list(read_conll(inp,args.estimate_src_max))
+        source_trees=list(read_conll(inp,args.estimate_src_max,args))
 
         if args.estimate_tgt_trees.endswith(".gz"):
             inp=gzip.open(args.estimate_tgt_trees,"rt")
         else:
             inp=open(args.estimate_tgt_trees,"rt")
         #read training data
-        target_trees=list(read_conll(inp,args.estimate_tgt_max))
+        target_trees=list(read_conll(inp,args.estimate_tgt_max,args))
 
         source_features=Stats.tree_features(source_trees)
         target_features=Stats.tree_features(target_trees)
         bins,sampling_table=Stats.hist_estimate(source_features,target_features,args)
 
-        for tree,comments in read_conll(sys.stdin,0):
+        for tree,comments in read_conll(sys.stdin,0,args):
             total+=1
             if Stats.sample((tree,comments),bins,sampling_table):
                 sampled+=1
