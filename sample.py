@@ -33,6 +33,10 @@ def read_conll(inp,maxsent,args):
                         continue
                     else:
                         seen.add(txt)
+                if len(sent)<args.min_tree_len:
+                    sent=[]
+                    comments=[]
+                    continue
                 count+=1
                 yield sent, comments
                 if maxsent!=0 and count>=maxsent:
@@ -54,7 +58,7 @@ def read_conll(inp,maxsent,args):
                     dups+=1
                 else:
                     yield sent, comments
-            else:
+            elif len(sent)>=args.min_tree_len:
                 yield sent, comments
     if args.dedup:
         print("Removed {} duplicates".format(dups),file=sys.stderr)
@@ -78,9 +82,9 @@ class Stats(object):
         dtype_bins=np.arange(1,30,2)
         source_H,xedge,yedge=np.histogram2d(source_features[:,0],source_features[:,1],bins=[tree_len_bins, dtype_bins],normed=False)
         target_H,xedge,yedge=np.histogram2d(target_features[:,0],target_features[:,1],bins=[tree_len_bins, dtype_bins],normed=False)
-        source_H+=0.01*np.sum(source_H)
+        source_H+=0.005*np.sum(source_H)
         source_H/=np.sum(source_H)
-        target_H+=0.01*np.sum(target_H)
+        target_H+=0.005*np.sum(target_H)
         target_H/=np.sum(target_H)
         sampling=(np.log(target_H)-np.log(source_H))-np.log(args.divider) #divide by four to get better shot at the long ones
         sampling=np.power(np.clip(np.exp(sampling),a_min=None,a_max=1.0),args.power) #sampling is now the probabilities with which to sample the trees
@@ -88,22 +92,12 @@ class Stats(object):
             import matplotlib.pyplot as plt
             plt.pcolor(xedge,yedge,sampling.T,vmin=0,vmax=1,cmap="gray_r")
             plt.colorbar()
-            plt.title("Sampling of pure data (blue downsampled)")
+            plt.title("Sampling of pure data (white downsampled)")
             plt.xlabel("Tree length")
             plt.ylabel("Num dep types")
             plt.show()
         return (tree_len_bins,dtype_bins), sampling
 
-    @classmethod
-    def grid(cls,scaler,estimator):
-        lengths=np.arange(1,30,1)
-        uniq_types=np.arange(0,1,0.05)
-        features=np.stack((np.meshgrid(lengths,uniq_types)),-1).reshape(-1,2)
-        norm_features=scaler.transform(features)
-        log_scores=estimator.score_samples(norm_features)
-        norm_const=scipy.special.logsumexp(log_scores)
-        log_scores-=norm_const
-        return features,log_scores
         
     @classmethod
     def sample(cls,tree,bins,sampling_table):
@@ -128,9 +122,10 @@ if __name__=="__main__":
     parser.add_argument('--estimate-src-trees', default=None, help='Use trees from this file as source distribution data.')
     parser.add_argument('--estimate-tgt-max', type=int, default=20000, metavar="NUMTREES", help='Estimate target based on NUMTREES trees. Default %(default)d')
     parser.add_argument('--estimate-tgt-trees', default=None, help='Use trees from this file as target distribution data.')
+    parser.add_argument('--min-tree-len',default=5,type=int,help="Minimum length of a tree to consider. Default %(default)d")
     parser.add_argument('--visualize',default=False,action="store_true",help="Plot the sampling probabilities")
-    parser.add_argument('--divider',default=4.0,type=float,help="Constant divider for the probabilities. The higher the number, the less data is sampled, but the more fidelity. Default %(default)f")
-    parser.add_argument('--power',default=2.0,type=float,help="Take power of the sampling probabilities, further increasing chance that rare trees get sample. Default %(default)f")
+    parser.add_argument('--divider',default=8.0,type=float,help="Constant divider for the probabilities. The higher the number, the less data is sampled, but the more fidelity. Default %(default)f")
+    parser.add_argument('--power',default=1.0,type=float,help="Take power of the sampling probabilities, further increasing chance that rare trees get sample. Default %(default)f")
     parser.add_argument('--max-output',default=50000,type=int,help="Sample max this many trees. Zero means all. Default %(default)d")
     parser.add_argument('--random',type=float,help="Sample with a random rate given as number between 0-1. Stop when max-output reached.")
     parser.add_argument('--shuffle',default=False, action="store_true",help="Read input, shuffle, sample max-output trees.")
@@ -193,7 +188,7 @@ if __name__=="__main__":
                     print("\n".join(comments))
                 print("\n".join("\t".join(cols) for cols in tree))
                 print()
-                if sampled>=args.max_output:
+                if args.max_output > 0 and sampled>=args.max_output:
                     break
     else:
         print("Don't know what to do. You need to give --estimate-* or --shuffle or --random.",file=sys.stderr)
@@ -201,8 +196,3 @@ if __name__=="__main__":
 
     print("Sampled {} of {} trees".format(sampled,total),file=sys.stderr)
 
-            
-
-
-            
-                
