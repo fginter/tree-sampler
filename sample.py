@@ -144,6 +144,7 @@ if __name__=="__main__":
 #    parser.add_argument('--divider',default=8.0,type=float,help="Constant divider for the probabilities. The higher the number, the less data is sampled, but the more fidelity. Default %(default)f")
 #    parser.add_argument('--power',default=1.0,type=float,help="Take power of the sampling probabilities, further increasing chance that rare trees get sample. Default %(default)f")
     parser.add_argument('--max-output',default=50000,type=int,help="Sample max this many trees. Zero means all. Default %(default)d")
+    parser.add_argument('--tok',default=False,action="store_true",help="--max-output is counted as tokens, not trees. Only works with --shuffle, sorry.")
     parser.add_argument('--random',type=float,help="Sample with a random rate given as number between 0-1. Stop when max-output reached.")
     parser.add_argument('--shuffle',default=False, action="store_true",help="Read input, shuffle, sample max-output trees.")
     
@@ -171,7 +172,17 @@ if __name__=="__main__":
         if args.max_output==0: #zero means all as the help says...
             src_trees=trees
         else:
-            src_trees=itertools.islice(trees,args.max_output)
+            if args.tok:
+                src_trees=[]
+                sampled_tokens=0
+                for (tree,comments) in trees:
+                    sampled_tokens+=len(tree)
+                    src_trees.append((tree,comments))
+                    if sampled_tokens>=args.max_output:
+                        break
+                print("Sampled {} tokens in {} trees, target was {}".format(sum(len(x[0]) for x in src_trees),len(src_trees),args.max_output),file=sys.stderr)
+            else:
+                src_trees=itertools.islice(trees,args.max_output)
         for tree,comments in src_trees:
             sampled+=1
             if comments:
