@@ -139,14 +139,15 @@ if __name__=="__main__":
     parser.add_argument('--estimate-src-max', type=int, default=20000, metavar="NUMTREES", help='Estimate from a maximum of this many trees. The more the better. Default %(default)d')
     parser.add_argument('--estimate-tgt-max', type=int, default=20000, metavar="NUMTREES", help='Estimate target based on NUMTREES trees. Default %(default)d')
     parser.add_argument('--estimate-tgt-trees', default=None, help='Use trees from this file as target distribution data.')
-    parser.add_argument('--min-tree-len',default=5,type=int,help="Minimum length of a tree to consider. Default %(default)d")
+    parser.add_argument('--min-tree-len',default=0,type=int,help="Minimum length of a tree to consider. Default %(default)d")
 #    parser.add_argument('--visualize',default=False,action="store_true",help="Plot the sampling probabilities")
 #    parser.add_argument('--divider',default=8.0,type=float,help="Constant divider for the probabilities. The higher the number, the less data is sampled, but the more fidelity. Default %(default)f")
 #    parser.add_argument('--power',default=1.0,type=float,help="Take power of the sampling probabilities, further increasing chance that rare trees get sample. Default %(default)f")
-    parser.add_argument('--max-output',default=50000,type=int,help="Sample max this many trees. Zero means all. Default %(default)d")
+    parser.add_argument('--max-output',default=0,type=int,help="Sample max this many trees. Zero means all. Default %(default)d")
     parser.add_argument('--tok',default=False,action="store_true",help="--max-output is counted as tokens, not trees. Only works with --shuffle, sorry.")
     parser.add_argument('--random',type=float,help="Sample with a random rate given as number between 0-1. Stop when max-output reached.")
     parser.add_argument('--shuffle',default=False, action="store_true",help="Read input, shuffle, sample max-output trees.")
+    parser.add_argument('--orphan',default=False, action="store_true",help="Only pass trees with orphans.")
     
     
 
@@ -158,6 +159,20 @@ if __name__=="__main__":
         for tree,comments in read_conll(sys.stdin,0,args):
             total+=1
             if random.random()<args.random:
+                sampled+=1
+                if comments:
+                    print("\n".join(comments))
+                print("\n".join("\t".join(cols) for cols in tree))
+                print()
+                if args.max_output>0 and sampled>=args.max_output:
+                    break
+    elif args.orphan:
+        for tree,comments in read_conll(sys.stdin,0,args):
+            total+=1
+            all_deps=set(cols[DEPREL] for cols in tree)
+            if "orphan" not in all_deps:
+                continue
+            else:
                 sampled+=1
                 if comments:
                     print("\n".join(comments))
